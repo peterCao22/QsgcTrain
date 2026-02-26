@@ -1,0 +1,31 @@
+# 环境与编译
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# 模型文件（体积大，不入库）
+*.model
+*.pkl
+*.joblib
+models/saved/
+
+# 数据文件（体积大，不入库）
+data/training_dataset.parquet
+data/training_stats.json
+data/strong_pool_snapshots/
+data/feature_library.json
+
+# 运行输出（不入库）
+results/
+logs/
+
+# Jupyter
+notebooks/.ipynb_checkpoints/
+
+# 临时调试脚本
+_*.py

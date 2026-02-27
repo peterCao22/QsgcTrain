@@ -190,6 +190,9 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "market_trend_20d":      ("大盘趋势向上", "大盘趋势偏弱"),
         "market_vol_20d":        ("市场高波动",   "市场低波动"),
         "market_breadth_5d":     ("市场普涨",     "市场普跌"),
+        # J: 交互特征
+        "slope60_mkt_adj":       ("顺势动量",     "逆势动量"),
+        "pct52w_mkt_risk":       ("高位熊市风险", "低位或牛市"),
     }
     desc_parts = []
     for feat in feat_cols:

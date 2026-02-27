@@ -91,6 +91,10 @@ MARKET_TREND_20D  = "market_trend_20d"   # I1: 指数近20日涨幅（同日所�
 MARKET_VOL_20D    = "market_vol_20d"     # I2: 近20日波动率（日收益标准差）
 MARKET_BREADTH_5D = "market_breadth_5d"  # I3: 近5日全市场上涨股票占比
 
+# J类：交互特征（2个，来自 features/cross.py）— T8 相对走弱60 重审
+SLOPE60_MKT_ADJ  = "slope60_mkt_adj"    # J1: 60日超额斜率 × (1+市场20日涨幅)
+PCT52W_MKT_RISK  = "pct52w_mkt_risk"    # J2: 52周价格分位 × (1−市场宽度5日)
+
 # G类：周K线特征（9个，来自 features/weekly.py）
 WEEKLY_VOL_RATIO     = "weekly_vol_ratio"     # G1: 4周/13周量比（量能中期趋势）
 WEEKLY_VOL_SPIKE     = "weekly_vol_spike"     # G2: 本周量/近8周均量（量能异动）
@@ -130,9 +134,11 @@ ALL_FEATURE_COLS: List[str] = [
     CONCEPT_RANK_20D, CONCEPT_RANK_60D, CONCEPT_MF_TREND,
     # I: 市场环境特征 (3)
     MARKET_TREND_20D, MARKET_VOL_20D, MARKET_BREADTH_5D,
+    # J: 交互特征 (2)  — T8 相对走弱60重审
+    SLOPE60_MKT_ADJ, PCT52W_MKT_RISK,
 ]
-# 共 53 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G9 + H3 + I3）
-# v2.0 新增：G9(周K线) + D1(chip_vs_avg_cost) + H3(概念热度) + I3(市场环境)
+# 共 55 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G9 + H3 + I3 + J2）
+# v2.0 新增：G9(周K线) + D1(chip_vs_avg_cost) + H3(概念热度) + I3(市场环境) + J2(交互)
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -376,6 +382,13 @@ class PrecursorFeatureExtractor:
             instruments=instruments,
         )
         feat_df = feat_df.join(i_feats, how="left")
+
+        # 追加 J 类特征（交互特征，依赖其他特征计算完成后再算）
+        from features.cross import compute_cross_features, CROSS_FEATURE_COLS
+        j_cols = CROSS_FEATURE_COLS
+        feat_df = feat_df.drop(columns=[c for c in j_cols if c in feat_df.columns], errors="ignore")
+        j_feats = compute_cross_features(feat_df)
+        feat_df = feat_df.join(j_feats, how="left")
 
         # 确保所有特征列存在
         for col in ALL_FEATURE_COLS:

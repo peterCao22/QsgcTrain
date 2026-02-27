@@ -180,6 +180,8 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "weekly_ma_bull":        ("周线多头",     "周线空头"),
         "weekly_w_bottom":       ("周线W底",      "无W底形态"),
         "weekly_ma5_slope":      ("周均线上扬",   "周均线下压"),
+        "weekly_v_bottom":       ("周线V反弹",    "无V底形态"),
+        "weekly_box_break":      ("箱体突破",     "未突破箱体"),
         # H: 概念热度
         "concept_rank_20d":      ("概念强势20",   "概念偏弱20"),
         "concept_rank_60d":      ("概念强势60",   "概念偏弱60"),

@@ -86,7 +86,7 @@ CONCEPT_RANK_20D  = "concept_rank_20d"   # H1: 最热概念20日涨幅百分位
 CONCEPT_RANK_60D  = "concept_rank_60d"   # H2: 最热概念60日涨幅百分位
 CONCEPT_MF_TREND  = "concept_mf_trend"   # H3: 最热概念资金流趋势(5d/20d均值比)
 
-# G类：周K线特征（7个，来自 features/weekly.py）
+# G类：周K线特征（9个，来自 features/weekly.py）
 WEEKLY_VOL_RATIO     = "weekly_vol_ratio"     # G1: 4周/13周量比（量能中期趋势）
 WEEKLY_VOL_SPIKE     = "weekly_vol_spike"     # G2: 本周量/近8周均量（量能异动）
 WEEKLY_PRICE_PCT_26W = "weekly_price_pct_26w" # G3: 26周价格分位（高/低位判断）
@@ -94,6 +94,8 @@ WEEKLY_PRICE_PCT_52W = "weekly_price_pct_52w" # G4: 52周价格分位
 WEEKLY_MA_BULL       = "weekly_ma_bull"       # G5: 均线多头排列得分(0~1)
 WEEKLY_W_BOTTOM      = "weekly_w_bottom"      # G6: W底形态得分(0~1)
 WEEKLY_MA5_SLOPE     = "weekly_ma5_slope"     # G7: 周线MA5三周斜率
+WEEKLY_V_BOTTOM      = "weekly_v_bottom"      # G8: V底形态得分(0~1)
+WEEKLY_BOX_BREAK     = "weekly_box_break"     # G9: 箱体突破得分(0~1)
 
 # D类扩展：筹码优化（1个）
 CHIP_VS_AVG_COST = "chip_vs_avg_cost"  # (close - avg_cost) / avg_cost，价格在成本区间的相对位置
@@ -114,15 +116,16 @@ ALL_FEATURE_COLS: List[str] = [
     PREV_TJ_BOARDS, PREV_NEW_HIGH_COUNT, PREV_POOL_APPEARANCES,
     # F: 估值 (6)
     LOG_FLOAT_CAP, PE_TTM, PB, PS_TTM, PE_SECT_RANK, PB_HIST_RANK,
-    # G: 周K线特征 (7)
+    # G: 周K线特征 (9)
     WEEKLY_VOL_RATIO, WEEKLY_VOL_SPIKE,
     WEEKLY_PRICE_PCT_26W, WEEKLY_PRICE_PCT_52W,
     WEEKLY_MA_BULL, WEEKLY_W_BOTTOM, WEEKLY_MA5_SLOPE,
+    WEEKLY_V_BOTTOM, WEEKLY_BOX_BREAK,
     # H: 概念热度特征 (3)
     CONCEPT_RANK_20D, CONCEPT_RANK_60D, CONCEPT_MF_TREND,
 ]
-# 共 48 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G7 + H3）
-# v2.0 新增：G7(周K线) + D1(chip_vs_avg_cost) + H3(概念热度)
+# 共 50 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G9 + H3）
+# v2.0 新增：G9(周K线) + D1(chip_vs_avg_cost) + H3(概念热度)
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────────────────────────

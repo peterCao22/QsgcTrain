@@ -1,5 +1,5 @@
 """
-周K线特征模块 (G 类特征，7个)
+周K线特征模块 (G 类特征，9个)
 
 核心思路：
   将日线数据聚合为周线（W-FRI），计算反映中期趋势、量能异动和高/低位判断的特征。
@@ -13,11 +13,14 @@
   G5: weekly_ma_bull       — 多头排列得分（MA5>MA10>MA20 且均线向上）
   G6: weekly_w_bottom      — W底形态得分（过去24周内存在双底结构）
   G7: weekly_ma5_slope     — 周线MA5的3周斜率（近期趋势方向）
+  G8: weekly_v_bottom      — V底形态得分（近期单次大跌后快速反弹）
+  G9: weekly_box_break     — 箱体突破得分（横盘后向上有效突破）
 
 数据依据（2026-02-27 验证）：
   - weekly_vol_ratio 与好行情涨幅相关系数 +0.35（最强信号）
   - weekly_price_pct_26w > 85% 与差行情大跌强相关（大跌组均值 90.4%）
   - 大牛股在扫描日附近普遍出现本周放量 1.5~2x
+  - 多只高涨幅股票（301257、300629）呈 V 形或箱体突破启动形态
 """
 
 from __future__ import annotations
@@ -37,6 +40,8 @@ WEEKLY_PRICE_PCT_52W  = "weekly_price_pct_52w" # G4: 52周价格分位
 WEEKLY_MA_BULL        = "weekly_ma_bull"       # G5: 均线多头排列得分 (0~1)
 WEEKLY_W_BOTTOM       = "weekly_w_bottom"      # G6: W底形态得分 (0~1)
 WEEKLY_MA5_SLOPE      = "weekly_ma5_slope"     # G7: 周线MA5的3周斜率
+WEEKLY_V_BOTTOM       = "weekly_v_bottom"      # G8: V底形态得分 (0~1)
+WEEKLY_BOX_BREAK      = "weekly_box_break"     # G9: 箱体突破得分 (0~1)
 
 WEEKLY_FEATURE_COLS: List[str] = [
     WEEKLY_VOL_RATIO,
@@ -46,6 +51,8 @@ WEEKLY_FEATURE_COLS: List[str] = [
     WEEKLY_MA_BULL,
     WEEKLY_W_BOTTOM,
     WEEKLY_MA5_SLOPE,
+    WEEKLY_V_BOTTOM,
+    WEEKLY_BOX_BREAK,
 ]
 
 
@@ -108,6 +115,135 @@ def _detect_w_bottom(closes: np.ndarray, window: int = 24) -> float:
             break
 
     return best_score
+
+
+def _detect_v_bottom(closes: np.ndarray, window: int = 16) -> float:
+    """
+    V底形态识别：近期经历单次大幅下跌后快速强力反弹，当前价已回到或超过跌前水平。
+
+    识别条件：
+      - 在最近 window 根周K中，找到一个低点（最低价）
+      - 低点之前的高点（低点前1~8周内）与低点之间跌幅 >= 15%（下跌幅度要有意义）
+      - 低点之后当前价反弹幅度 >= 12%（已经有力反弹）
+      - 整个过程在最近 window 周内（近期事件，非远古历史）
+
+    返回值：
+      1.0 = V底反弹且当前价已超过跌前高点（完全收复失地）
+      0.7 = V底反弹中，已反弹超过60%但未完全收复
+      0.4 = V底反弹中，已反弹超过30%
+      0.0 = 未发现V底
+    """
+    w = closes[-min(len(closes), window):]
+    n = len(w)
+    if n < 8:
+        return 0.0
+
+    cur = w[-1]
+
+    # 在后半段（近8周）找最低点
+    search_range = w[max(0, n - 8):]
+    low_idx_local = int(np.argmin(search_range))
+    low_idx = max(0, n - 8) + low_idx_local
+    low_val = w[low_idx]
+
+    # 低点不能是最后一根（需要已经开始反弹）
+    if low_idx >= n - 1:
+        return 0.0
+
+    # 低点之前找高点（低点前1~8周）
+    pre_range = w[max(0, low_idx - 8): low_idx]
+    if len(pre_range) < 1:
+        return 0.0
+    pre_high = float(np.max(pre_range))
+
+    # 下跌幅度需 >= 15%
+    if pre_high <= 0 or low_val <= 0:
+        return 0.0
+    drop = (pre_high - low_val) / pre_high
+    if drop < 0.15:
+        return 0.0
+
+    # 从低点到当前的反弹幅度
+    rebound = (cur - low_val) / low_val
+    if rebound < 0.12:
+        return 0.0
+
+    # 评分
+    if cur >= pre_high * 0.98:
+        return 1.0          # 完全收复
+    elif rebound >= drop * 0.6:
+        return 0.7          # 反弹超过下跌60%
+    elif rebound >= drop * 0.3:
+        return 0.4          # 反弹超过下跌30%
+    else:
+        return 0.0
+
+
+def _detect_box_break(closes: np.ndarray, window: int = 20) -> float:
+    """
+    箱体突破形态识别：近N周横盘震荡后向上有效突破。
+
+    识别条件：
+      - 在最近 window 周中，前半段（window//2 周）处于横盘状态：
+        价格区间 (max-min)/min < 15%（振幅不超过15%）
+      - 横盘至少持续 5 周（避免一两根K线的短暂盘整）
+      - 当前价相对横盘上轨突破幅度 >= 2%（有效向上突破）
+      - 突破发生在最近 4 周内（近期事件）
+
+    返回值：
+      1.0 = 当前正处于突破状态（近2周内突破，突破幅度 > 5%）
+      0.7 = 近4周内突破，幅度2~5%
+      0.3 = 仍在箱体内但已接近上轨（距上轨 < 3%）
+      0.0 = 未发现箱体或未突破
+    """
+    w = closes[-min(len(closes), window):]
+    n = len(w)
+    if n < 10:
+        return 0.0
+
+    cur = w[-1]
+    half = max(5, n // 2)
+
+    # 用前半段判断是否横盘
+    consolidation = w[: n - 4]   # 留最近4周给突破判断
+    if len(consolidation) < 5:
+        return 0.0
+
+    box_hi = float(np.max(consolidation))
+    box_lo = float(np.min(consolidation))
+    if box_lo <= 0:
+        return 0.0
+
+    amplitude = (box_hi - box_lo) / box_lo
+    if amplitude >= 0.18:        # 振幅超过18%，不算横盘
+        return 0.0
+
+    # 平稳性检验：前半段与后半段均价差异 < 5%，排除单边趋势行情
+    mid = len(consolidation) // 2
+    mean_first = float(np.mean(consolidation[:mid]))
+    mean_second = float(np.mean(consolidation[mid:]))
+    if mean_first > 0 and abs(mean_second - mean_first) / mean_first > 0.05:
+        return 0.0              # 价格单方向趋势，不是横盘
+
+    # 检查近4周是否发生突破
+    recent = w[n - 4:]
+    break_weeks = [i for i, p in enumerate(recent) if p > box_hi * 1.02]
+
+    if not break_weeks:
+        # 尚未突破，检查是否接近上轨
+        if cur > box_hi * 0.97:
+            return 0.3
+        return 0.0
+
+    first_break = break_weeks[0]  # 第一次突破是第几周（0-based，0=最早）
+    break_pct = (cur - box_hi) / box_hi
+
+    if first_break <= 1 and break_pct >= 0.05:
+        return 1.0           # 近2周内突破且突破幅度 > 5%
+    elif break_pct >= 0.02:
+        return 0.7           # 已突破，幅度2~5%
+    else:
+        return 0.3           # 突破幅度不足但已越过箱体
 
 
 def _weekly_metrics_single(
@@ -180,6 +316,12 @@ def _weekly_metrics_single(
         ma5_3ago = _sma(c[:-3], 5)
         if not any(np.isnan([ma5_cur, ma5_3ago])) and ma5_3ago > 0:
             result[WEEKLY_MA5_SLOPE] = (ma5_cur - ma5_3ago) / ma5_3ago
+
+    # G8: V底形态得分
+    result[WEEKLY_V_BOTTOM] = _detect_v_bottom(c)
+
+    # G9: 箱体突破得分
+    result[WEEKLY_BOX_BREAK] = _detect_box_break(c)
 
     return result
 

@@ -241,6 +241,39 @@ def load_concept_component_range(
         return pd.DataFrame()
 
 
+def load_concept_bar(
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    加载概念日K线数据（concept_bar1d）。
+
+    Returns:
+        DataFrame，列：date, concept_code, concept_name, pct_change, net_amount
+        按 date, concept_code 升序排列。
+        如表不存在或无数据，返回空 DataFrame。
+    """
+    try:
+        sql = """
+            SELECT date, concept_code, concept_name,
+                   change_ratio AS pct_change,
+                   amount       AS trade_amount
+            FROM concept_bar1d
+            WHERE date >= :start AND date <= :end
+            ORDER BY date, concept_code
+        """
+        df = read_sql_chunked(sql, {"start": start_date, "end": end_date})
+        df["date"] = pd.to_datetime(df["date"])
+        logger.info(
+            f"concept_bar1d loaded: {len(df):,} rows  "
+            f"{df['concept_code'].nunique()} concepts  [{start_date} ~ {end_date}]"
+        )
+        return df
+    except Exception as exc:
+        logger.warning(f"concept_bar1d unavailable ({exc}); returning empty DataFrame")
+        return pd.DataFrame()
+
+
 # ─── 估值数据 ─────────────────────────────────────────────────────────────────
 
 def load_valuation(

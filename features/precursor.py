@@ -81,6 +81,11 @@ PS_TTM         = "ps_ttm"         # 市销率TTM
 PE_SECT_RANK   = "pe_sect_rank"   # PE在截面全市场的百分位（0~1）
 PB_HIST_RANK   = "pb_hist_rank"   # PB在自身过去252日历史百分位（0~1）
 
+# H类：概念热度特征（3个，来自 features/concept.py）
+CONCEPT_RANK_20D  = "concept_rank_20d"   # H1: 最热概念20日涨幅百分位
+CONCEPT_RANK_60D  = "concept_rank_60d"   # H2: 最热概念60日涨幅百分位
+CONCEPT_MF_TREND  = "concept_mf_trend"   # H3: 最热概念资金流趋势(5d/20d均值比)
+
 # G类：周K线特征（7个，来自 features/weekly.py）
 WEEKLY_VOL_RATIO     = "weekly_vol_ratio"     # G1: 4周/13周量比（量能中期趋势）
 WEEKLY_VOL_SPIKE     = "weekly_vol_spike"     # G2: 本周量/近8周均量（量能异动）
@@ -113,9 +118,11 @@ ALL_FEATURE_COLS: List[str] = [
     WEEKLY_VOL_RATIO, WEEKLY_VOL_SPIKE,
     WEEKLY_PRICE_PCT_26W, WEEKLY_PRICE_PCT_52W,
     WEEKLY_MA_BULL, WEEKLY_W_BOTTOM, WEEKLY_MA5_SLOPE,
+    # H: 概念热度特征 (3)
+    CONCEPT_RANK_20D, CONCEPT_RANK_60D, CONCEPT_MF_TREND,
 ]
-# 共 45 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G7）
-# v2.0 新增：G7(周K线) + D1(chip_vs_avg_cost)
+# 共 48 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G7 + H3）
+# v2.0 新增：G7(周K线) + D1(chip_vs_avg_cost) + H3(概念热度)
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -166,21 +173,29 @@ class PrecursorFeatureExtractor:
         strong_pool_hist: pd.DataFrame,
         index_kline: Optional[pd.DataFrame] = None,
         valuation: Optional[pd.DataFrame] = None,
+        concept_bar: Optional[pd.DataFrame] = None,
+        concept_comp_range: Optional[pd.DataFrame] = None,
     ):
         """
         Args:
-            kline:            日线数据，必须包含 date, instrument, close, high, low,
-                              volume, ma20（若无 ma20 则内部计算）
-            chips:            筹码数据，date, instrument, win_percent, concentration, avg_cost
-            moneyflow:        资金流数据，date, instrument, netflow_amount_main
-            strong_pool_hist: 历史强势股池，date, instrument, tj_boards, new_high
-            index_kline:      大盘指数日K线（来自 index_bar1d 表），
-                              含 date, instrument, close 列。
-                              传入时优先用真实指数收益率计算超额收益；
-                              不传时降级为全市场等权均值（精度略低）。
-            valuation:        个股估值数据（valuation_all 表），
-                              含 date, instrument, pe_ttm, pb, ps_ttm, float_market_cap。
-                              不传时 F 类估值特征全部置 NaN。
+            kline:              日线数据，必须包含 date, instrument, close, high, low,
+                                volume, ma20（若无 ma20 则内部计算）
+            chips:              筹码数据，date, instrument, win_percent, concentration, avg_cost
+            moneyflow:          资金流数据，date, instrument, netflow_amount_main
+            strong_pool_hist:   历史强势股池，date, instrument, tj_boards, new_high
+            index_kline:        大盘指数日K线（来自 index_bar1d 表），
+                                含 date, instrument, close 列。
+                                传入时优先用真实指数收益率计算超额收益；
+                                不传时降级为全市场等权均值（精度略低）。
+            valuation:          个股估值数据（valuation_all 表），
+                                含 date, instrument, pe_ttm, pb, ps_ttm, float_market_cap。
+                                不传时 F 类估值特征全部置 NaN。
+            concept_bar:        概念日K线（concept_bar1d 表），
+                                含 date, concept_code, pct_change, net_amount。
+                                不传时 H 类概念特征全部置 NaN。
+            concept_comp_range: 概念成分快照（concept_component 表），
+                                含 date, concept_code, instrument。
+                                不传时 H 类概念特征全部置 NaN。
         """
         kline["date"] = pd.to_datetime(kline["date"])
         self._kline = kline.sort_values(["instrument", "date"]) # 全市场宽表，一次加载，多次复用
@@ -248,6 +263,21 @@ class PrecursorFeatureExtractor:
         else:
             self._val_by_inst = {}
             self._val_all = pd.DataFrame()
+
+        # 概念热度数据（H 类特征，可选）
+        if concept_bar is not None and not concept_bar.empty:
+            cb = concept_bar.copy()
+            cb["date"] = pd.to_datetime(cb["date"])
+            self._concept_bar: Optional[pd.DataFrame] = cb
+        else:
+            self._concept_bar = None
+
+        if concept_comp_range is not None and not concept_comp_range.empty:
+            cc = concept_comp_range.copy()
+            cc["date"] = pd.to_datetime(cc["date"])
+            self._concept_comp_range: Optional[pd.DataFrame] = cc
+        else:
+            self._concept_comp_range = None
 
     # ── 主接口 ────────────────────────────────────────────────────────────────
 
@@ -317,6 +347,13 @@ class PrecursorFeatureExtractor:
         feat_df = feat_df.drop(columns=[c for c in g_cols if c in feat_df.columns], errors="ignore")
         g_feats = compute_weekly_features(self._kline, feat_date, instruments)
         feat_df = feat_df.join(g_feats, how="left")
+
+        # 追加 H 类特征（概念热度）
+        from features.concept import compute_concept_features, CONCEPT_FEATURE_COLS
+        h_cols = CONCEPT_FEATURE_COLS
+        feat_df = feat_df.drop(columns=[c for c in h_cols if c in feat_df.columns], errors="ignore")
+        h_feats = self._compute_concept_features(feat_date, instruments)
+        feat_df = feat_df.join(h_feats, how="left")
 
         # 确保所有特征列存在
         for col in ALL_FEATURE_COLS:
@@ -739,3 +776,37 @@ class PrecursorFeatureExtractor:
                 result.loc[inst, PB_HIST_RANK] = float((hist < float(cur_pb)).mean())
 
         return result
+
+    def _compute_concept_features(
+        self,
+        feat_date: str,
+        instruments: List[str],
+    ) -> pd.DataFrame:
+        """
+        计算 H 类概念热度特征（委托 features/concept.py）。
+
+        self._concept_bar        : concept_bar1d 全量数据（由构造方或 compute 注入）
+        self._concept_comp_range : concept_component 快照（由构造方或 compute 注入）
+
+        两个属性若不存在则返回全 NaN（不阻断流程）。
+        """
+        from features.concept import compute_concept_features, CONCEPT_FEATURE_COLS
+        h_cols = CONCEPT_FEATURE_COLS
+        empty = pd.DataFrame(index=instruments, columns=h_cols, dtype=float)
+
+        concept_bar = getattr(self, "_concept_bar", None)
+        concept_comp = getattr(self, "_concept_comp_range", None)
+        if concept_bar is None or concept_comp is None:
+            logger.debug("H类: _concept_bar 或 _concept_comp_range 未加载，跳过")
+            return empty
+
+        try:
+            return compute_concept_features(
+                concept_bar=concept_bar,
+                concept_comp_range=concept_comp,
+                feat_date=feat_date,
+                instruments=instruments,
+            )
+        except Exception as exc:
+            logger.warning(f"H类概念特征计算失败: {exc}")
+            return empty

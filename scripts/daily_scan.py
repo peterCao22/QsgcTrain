@@ -39,7 +39,15 @@ from loguru import logger
 
 from config import DATA_DIR, EXCLUDE_PREFIXES, RESULTS_DIR
 from data.db_loader import get_tradable_universe, offset_trading_day
-from data.market_loader import load_chips, load_index_kline, load_kline, load_moneyflow, load_valuation
+from data.market_loader import (
+    load_chips,
+    load_concept_bar,
+    load_concept_component_range,
+    load_index_kline,
+    load_kline,
+    load_moneyflow,
+    load_valuation,
+)
 from features.precursor import ALL_FEATURE_COLS, PrecursorFeatureExtractor
 from models.lgb_classifier import FEATURE_LIB_PATH, MODELS_DIR, LGBClassifier, load_feature_library
 
@@ -172,6 +180,10 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "weekly_ma_bull":        ("周线多头",     "周线空头"),
         "weekly_w_bottom":       ("周线W底",      "无W底形态"),
         "weekly_ma5_slope":      ("周均线上扬",   "周均线下压"),
+        # H: 概念热度
+        "concept_rank_20d":      ("概念强势20",   "概念偏弱20"),
+        "concept_rank_60d":      ("概念强势60",   "概念偏弱60"),
+        "concept_mf_trend":      ("概念资金加速", "概念资金放缓"),
     }
     desc_parts = []
     for feat in feat_cols:
@@ -298,6 +310,9 @@ def run_scan(
     index_kline = load_index_kline(data_start, scan_date, instruments=["000001.SH"])
     sp_hist     = _load_strong_pool_hist(data_start, scan_date)
     valuation   = load_valuation(data_start, scan_date)
+    # 概念数据（H类特征，concept_bar1d 从2023年开始，往前取90天快照即可）
+    concept_bar  = load_concept_bar(data_start, scan_date)
+    concept_comp = load_concept_component_range(data_start, scan_date)
 
     if kline.empty:
         logger.error("No kline data loaded. Check database connection and date range.")
@@ -305,12 +320,14 @@ def run_scan(
 
     # 初始化特征提取器
     extractor = PrecursorFeatureExtractor(
-        kline            = kline,
-        chips            = chips,
-        moneyflow        = moneyflow,
-        strong_pool_hist = sp_hist,
-        index_kline      = index_kline,
-        valuation        = valuation,
+        kline               = kline,
+        chips               = chips,
+        moneyflow           = moneyflow,
+        strong_pool_hist    = sp_hist,
+        index_kline         = index_kline,
+        valuation           = valuation,
+        concept_bar         = concept_bar,
+        concept_comp_range  = concept_comp,
     )
 
     # 提取特征（扫描日当天即为 T_feat）

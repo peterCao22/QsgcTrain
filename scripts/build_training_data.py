@@ -64,6 +64,7 @@ from config import (
 from data.db_loader import get_trading_days, offset_trading_day, read_sql, read_sql_chunked
 from data.market_loader import (
     load_chips,
+    load_concept_bar,
     load_concept_component_range,
     load_index_kline,
     load_kline,
@@ -432,6 +433,9 @@ def build_training_data(
     if not snap_dates_cc:
         logger.warning("concept_component unavailable, negatives will be random")
 
+    # 加载概念K线，供 H 类特征计算（T4 概念热度）
+    concept_bar = load_concept_bar(data_start, data_end)
+
     logger.info("Precomputing 20-day return matrix...")
     try:
         kline_close = kline.pivot_table(index="date", columns="instrument", values="close").sort_index()
@@ -443,6 +447,7 @@ def build_training_data(
     extractor = PrecursorFeatureExtractor(
         kline=kline, chips=chips, moneyflow=moneyflow,
         strong_pool_hist=sp_df_full, index_kline=index_kline, valuation=valuation,
+        concept_bar=concept_bar, concept_comp_range=concept_df,
     )
 
     logger.info(f"Precomputing kline validity (>= {MIN_HIST_DAYS} days)...")

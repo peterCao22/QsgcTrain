@@ -159,7 +159,7 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "price_vs_ma5":          ("站上MA5",      "跌破MA5"),
         "price_vs_ma60":         ("站上MA60",     "跌破MA60"),
         "win_percent":           ("筹码盈利",     "筹码亏损"),
-        "chip_concentration":    ("筹码集中",     "筹码分散"),
+        "chip_concentration":    ("筹码集中",     "筹码分布广"),
         "price_to_avgcost":      ("高于均成本",   "低于均成本"),
         # E: 历史强势
         "prev_tj_boards":        ("历史连板",     "无连板记录"),
@@ -186,6 +186,10 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "concept_rank_20d":      ("概念强势20",   "概念偏弱20"),
         "concept_rank_60d":      ("概念强势60",   "概念偏弱60"),
         "concept_mf_trend":      ("概念资金加速", "概念资金放缓"),
+        # I: 市场环境
+        "market_trend_20d":      ("大盘趋势向上", "大盘趋势偏弱"),
+        "market_vol_20d":        ("市场高波动",   "市场低波动"),
+        "market_breadth_5d":     ("市场普涨",     "市场普跌"),
     }
     desc_parts = []
     for feat in feat_cols:

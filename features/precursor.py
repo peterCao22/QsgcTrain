@@ -86,6 +86,11 @@ CONCEPT_RANK_20D  = "concept_rank_20d"   # H1: 最热概念20日涨幅百分位
 CONCEPT_RANK_60D  = "concept_rank_60d"   # H2: 最热概念60日涨幅百分位
 CONCEPT_MF_TREND  = "concept_mf_trend"   # H3: 最热概念资金流趋势(5d/20d均值比)
 
+# I类：市场环境特征（3个，来自 features/market_env.py）
+MARKET_TREND_20D  = "market_trend_20d"   # I1: 指数近20日涨幅（同日所有股票相同）
+MARKET_VOL_20D    = "market_vol_20d"     # I2: 近20日波动率（日收益标准差）
+MARKET_BREADTH_5D = "market_breadth_5d"  # I3: 近5日全市场上涨股票占比
+
 # G类：周K线特征（9个，来自 features/weekly.py）
 WEEKLY_VOL_RATIO     = "weekly_vol_ratio"     # G1: 4周/13周量比（量能中期趋势）
 WEEKLY_VOL_SPIKE     = "weekly_vol_spike"     # G2: 本周量/近8周均量（量能异动）
@@ -123,9 +128,11 @@ ALL_FEATURE_COLS: List[str] = [
     WEEKLY_V_BOTTOM, WEEKLY_BOX_BREAK,
     # H: 概念热度特征 (3)
     CONCEPT_RANK_20D, CONCEPT_RANK_60D, CONCEPT_MF_TREND,
+    # I: 市场环境特征 (3)
+    MARKET_TREND_20D, MARKET_VOL_20D, MARKET_BREADTH_5D,
 ]
-# 共 50 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G9 + H3）
-# v2.0 新增：G9(周K线) + D1(chip_vs_avg_cost) + H3(概念热度)
+# 共 53 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G9 + H3 + I3）
+# v2.0 新增：G9(周K线) + D1(chip_vs_avg_cost) + H3(概念热度) + I3(市场环境)
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -357,6 +364,18 @@ class PrecursorFeatureExtractor:
         feat_df = feat_df.drop(columns=[c for c in h_cols if c in feat_df.columns], errors="ignore")
         h_feats = self._compute_concept_features(feat_date, instruments)
         feat_df = feat_df.join(h_feats, how="left")
+
+        # 追加 I 类特征（市场环境）
+        from features.market_env import compute_market_env_features, MARKET_ENV_COLS
+        i_cols = MARKET_ENV_COLS
+        feat_df = feat_df.drop(columns=[c for c in i_cols if c in feat_df.columns], errors="ignore")
+        i_feats = compute_market_env_features(
+            market_ret=self._market_ret,
+            kline=self._kline,
+            feat_date=feat_date,
+            instruments=instruments,
+        )
+        feat_df = feat_df.join(i_feats, how="left")
 
         # 确保所有特征列存在
         for col in ALL_FEATURE_COLS:

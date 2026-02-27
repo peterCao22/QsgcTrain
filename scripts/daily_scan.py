@@ -47,7 +47,27 @@ from models.lgb_classifier import FEATURE_LIB_PATH, MODELS_DIR, LGBClassifier, l
 
 DEFAULT_MODEL_PATH = MODELS_DIR / "lgb_classifier.pkl"
 DEFAULT_TOPK       = 50
-DEFAULT_LOOKBACK   = 170   # 特征计算所需最大回看天数（含缓冲）
+DEFAULT_LOOKBACK   = 280   # 特征计算所需最大回看天数（v2.0 延长至280支持52周周线特征）
+
+# T1: 大市值/稳定行业过滤阈值（流通市值，单位：元）
+# 500亿 = 5e10 元。覆盖格力(2106亿)、中国移动(2万亿)等高市值稳定股
+FLOAT_CAP_MAX = 5e10  # 500亿元
+
+# T1: 稳定行业的股票前缀或特殊代码（补充兜底规则）
+# 主要依赖市值过滤，这里作为额外保障过滤已知的公用事业/高速/大行
+_STABLE_INDUSTRY_CODES = {
+    "601328",  # 交通银行
+    "601398",  # 工商银行
+    "601288",  # 农业银行
+    "601939",  # 建设银行
+    "600036",  # 招商银行
+    "601988",  # 中国银行
+    "601816",  # 京沪高铁
+    "601377",  # 兴业银行
+    "600377",  # 宁沪高速
+    "600350",  # 山东高速
+    "600012",  # 皖通高速
+}
 
 # ─── 辅助 ─────────────────────────────────────────────────────────────────────
 
@@ -142,6 +162,16 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
         "pb_hist_rank":          ("PB历史低位",   "PB历史高位"),
         "pe_ttm":                ("PE偏低",       "PE偏高"),
         "ps_ttm":                ("PS偏低",       "PS偏高"),
+        # D扩展: 筹码优化
+        "chip_vs_avg_cost":      ("略高于成本",   "大幅偏离成本"),
+        # G: 周K线
+        "weekly_vol_ratio":      ("周量加速",     "周量萎缩"),
+        "weekly_vol_spike":      ("本周放量",     "本周缩量"),
+        "weekly_price_pct_26w":  ("26周低位",     "26周高位"),
+        "weekly_price_pct_52w":  ("52周低位",     "52周高位"),
+        "weekly_ma_bull":        ("周线多头",     "周线空头"),
+        "weekly_w_bottom":       ("周线W底",      "无W底形态"),
+        "weekly_ma5_slope":      ("周均线上扬",   "周均线下压"),
     }
     desc_parts = []
     for feat in feat_cols:
@@ -168,20 +198,73 @@ def _top_feature_summary(row: pd.Series, feat_cols: List[str], top_n: int = 3,
 
 # ─── 主扫描流程 ───────────────────────────────────────────────────────────────
 
+def _apply_cap_filter(
+    feat_df: pd.DataFrame,
+    valuation: pd.DataFrame,
+    scan_date: str,
+    cap_max: float = FLOAT_CAP_MAX,
+) -> pd.DataFrame:
+    """
+    T1: 过滤掉流通市值 > cap_max 或属于稳定行业的股票。
+
+    使用已加载的 valuation 表取扫描日前最新一条估值快照，
+    过滤 float_market_cap > cap_max（默认500亿元）的股票，
+    并补充过滤特定稳定行业代码。
+    """
+    if valuation.empty or "float_market_cap" not in valuation.columns:
+        logger.warning("T1: valuation 数据不可用，跳过市值过滤")
+        return feat_df
+
+    scan_ts = pd.Timestamp(scan_date)
+    # 取每只股票 <= scan_date 的最新估值快照
+    val_snap = (
+        valuation[valuation["date"] <= scan_ts]
+        .sort_values("date")
+        .groupby("instrument")
+        .last()[["float_market_cap"]]
+        .reset_index()
+    )
+    val_snap["float_market_cap"] = pd.to_numeric(
+        val_snap["float_market_cap"], errors="coerce"
+    )
+
+    before_n = len(feat_df)
+    # 过滤大市值
+    large_cap = set(
+        val_snap[val_snap["float_market_cap"] > cap_max]["instrument"].tolist()
+    )
+    # 过滤稳定行业代码
+    stable = {
+        i for i in feat_df["instrument"].tolist()
+        if any(i.startswith(c) for c in _STABLE_INDUSTRY_CODES)
+    }
+    remove = large_cap | stable
+    feat_df = feat_df[~feat_df["instrument"].isin(remove)].copy()
+    removed_n = before_n - len(feat_df)
+    if removed_n > 0:
+        logger.info(
+            f"T1 市值/行业过滤: 移除 {removed_n} 只（大市值>{cap_max/1e8:.0f}亿 {len(large_cap)}只，"
+            f"稳定行业 {len(stable & remove)}只），剩余 {len(feat_df)} 只"
+        )
+    return feat_df
+
+
 def run_scan(
     scan_date: str,
     topk: int = DEFAULT_TOPK,
     model_path: Path = DEFAULT_MODEL_PATH,
     output_features: bool = True,
+    apply_cap_filter: bool = True,
 ) -> pd.DataFrame:
     """
     对指定日期的全市场进行蓄力期扫描。
 
     Args:
-        scan_date:       扫描日期（YYYY-MM-DD）
-        topk:            输出 Top-K 候选股
-        model_path:      模型 pkl 文件路径
-        output_features: True = 输出文件含各特征值列
+        scan_date:        扫描日期（YYYY-MM-DD）
+        topk:             输出 Top-K 候选股
+        model_path:       模型 pkl 文件路径
+        output_features:  True = 输出文件含各特征值列
+        apply_cap_filter: True = 启用 T1 大市值/稳定行业后置过滤（默认开启）
 
     Returns:
         DataFrame，按 score 降序排列，含 instrument / score / 各特征列
@@ -260,13 +343,18 @@ def run_scan(
     feat_df["score"] = model.predict_proba(feat_df)
     feat_df = feat_df.sort_values("score", ascending=False).reset_index(drop=True)
 
-    # 计算全局特征统计（用于 z-score 标准化显示）
+    # 计算全局特征统计（用于 z-score 标准化显示，打分后、过滤前计算，保证统计的代表性）
     global_stats = {}
     for fc in feat_cols:
         if fc in feat_df.columns:
             col = feat_df[fc].dropna()
             if len(col) > 10:
                 global_stats[fc] = (float(col.median()), float(col.std() + 1e-10))
+
+    # T1: 大市值 / 稳定行业过滤（在全市场统计后过滤，不影响 global_stats 代表性）
+    if apply_cap_filter:
+        feat_df = _apply_cap_filter(feat_df, valuation, scan_date)
+        feat_df = feat_df.reset_index(drop=True)
 
     # 取 Top-K
     top_df = feat_df.head(topk).copy()
@@ -346,13 +434,16 @@ def main() -> None:
                         help=f"模型文件路径（默认 {DEFAULT_MODEL_PATH}）")
     parser.add_argument("--no-features", action="store_true", default=False,
                         help="输出 CSV 不含各特征列（文件更小）")
+    parser.add_argument("--no-cap-filter", action="store_true", default=False,
+                        help="禁用大市值/稳定行业过滤（用于对比分析）")
     args = parser.parse_args()
 
     top_df, global_stats = run_scan(
-        scan_date       = args.date,
-        topk            = args.topk,
-        model_path      = Path(args.model),
-        output_features = not args.no_features,
+        scan_date        = args.date,
+        topk             = args.topk,
+        model_path       = Path(args.model),
+        output_features  = not args.no_features,
+        apply_cap_filter = not args.no_cap_filter,
     )
 
     model = LGBClassifier.load(Path(args.model))

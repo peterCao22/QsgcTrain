@@ -81,6 +81,18 @@ PS_TTM         = "ps_ttm"         # 市销率TTM
 PE_SECT_RANK   = "pe_sect_rank"   # PE在截面全市场的百分位（0~1）
 PB_HIST_RANK   = "pb_hist_rank"   # PB在自身过去252日历史百分位（0~1）
 
+# G类：周K线特征（7个，来自 features/weekly.py）
+WEEKLY_VOL_RATIO     = "weekly_vol_ratio"     # G1: 4周/13周量比（量能中期趋势）
+WEEKLY_VOL_SPIKE     = "weekly_vol_spike"     # G2: 本周量/近8周均量（量能异动）
+WEEKLY_PRICE_PCT_26W = "weekly_price_pct_26w" # G3: 26周价格分位（高/低位判断）
+WEEKLY_PRICE_PCT_52W = "weekly_price_pct_52w" # G4: 52周价格分位
+WEEKLY_MA_BULL       = "weekly_ma_bull"       # G5: 均线多头排列得分(0~1)
+WEEKLY_W_BOTTOM      = "weekly_w_bottom"      # G6: W底形态得分(0~1)
+WEEKLY_MA5_SLOPE     = "weekly_ma5_slope"     # G7: 周线MA5三周斜率
+
+# D类扩展：筹码优化（1个）
+CHIP_VS_AVG_COST = "chip_vs_avg_cost"  # (close - avg_cost) / avg_cost，价格在成本区间的相对位置
+
 ALL_FEATURE_COLS: List[str] = [
     # A: 趋势斜率 (5)
     VOL_SLOPE_60D, PRICE_SLOPE_60D, MF_SLOPE_30D, MF_SLOPE_10D, PRICE_SLOPE_20D,
@@ -90,15 +102,20 @@ ALL_FEATURE_COLS: List[str] = [
     # C: 持续时间/形态 (6)
     DAYS_ABOVE_MA20, CONSEC_HIGHER_LOW, DAYS_POSITIVE_MF,
     HIGH_CLOSE_RATIO, CONSEC_GREEN, VOL_SPIKE_COUNT,
-    # D: 层级对比 (7)
+    # D: 层级对比 (8，含新增 chip_vs_avg_cost)
     DIST_52W_HIGH, DIST_60D_LOW_REBOUND, PRICE_VS_MA5, PRICE_VS_MA60,
-    WIN_PERCENT, CHIP_CONCENTRATION, PRICE_TO_AVGCOST,
+    WIN_PERCENT, CHIP_CONCENTRATION, PRICE_TO_AVGCOST, CHIP_VS_AVG_COST,
     # E: 历史强势 (3)
     PREV_TJ_BOARDS, PREV_NEW_HIGH_COUNT, PREV_POOL_APPEARANCES,
     # F: 估值 (6)
     LOG_FLOAT_CAP, PE_TTM, PB, PS_TTM, PE_SECT_RANK, PB_HIST_RANK,
+    # G: 周K线特征 (7)
+    WEEKLY_VOL_RATIO, WEEKLY_VOL_SPIKE,
+    WEEKLY_PRICE_PCT_26W, WEEKLY_PRICE_PCT_52W,
+    WEEKLY_MA_BULL, WEEKLY_W_BOTTOM, WEEKLY_MA5_SLOPE,
 ]
-# 共 37 个特征（A5 + B10 + C6 + D7 + E3 + F6）
+# 共 45 个特征（A5 + B10 + C6 + D8 + E3 + F6 + G7）
+# v2.0 新增：G7(周K线) + D1(chip_vs_avg_cost)
 
 
 # ─── 辅助函数 ─────────────────────────────────────────────────────────────────
@@ -294,6 +311,13 @@ class PrecursorFeatureExtractor:
         f_feats = self._compute_valuation_features(feat_ts, instruments)
         feat_df = feat_df.join(f_feats, how="left")
 
+        # 追加 G 类特征（周K线）
+        from features.weekly import compute_weekly_features, WEEKLY_FEATURE_COLS
+        g_cols = WEEKLY_FEATURE_COLS
+        feat_df = feat_df.drop(columns=[c for c in g_cols if c in feat_df.columns], errors="ignore")
+        g_feats = compute_weekly_features(self._kline, feat_date, instruments)
+        feat_df = feat_df.join(g_feats, how="left")
+
         # 确保所有特征列存在
         for col in ALL_FEATURE_COLS:
             if col not in feat_df.columns:
@@ -478,7 +502,7 @@ class PrecursorFeatureExtractor:
         # D4: 现价相对MA60偏离度（越高=中长期趋势越强）
         row[PRICE_VS_MA60] = float((cur_price - ma60) / ma60) if ma60 and ma60 > 0 else np.nan
 
-        # D5/D6/D7: 筹码类特征
+        # D5/D6/D7/D8: 筹码类特征
         chip_row = self._get_chips(instrument, feat_ts)
         if chip_row is not None:
             row[WIN_PERCENT]        = chip_row.get("win_percent", np.nan)
@@ -487,8 +511,16 @@ class PrecursorFeatureExtractor:
             row[PRICE_TO_AVGCOST]   = (
                 float(cur_price / avg_cost) if avg_cost and avg_cost > 0 else np.nan
             )
+            # D8: (close - avg_cost) / avg_cost
+            #   0附近 = 价格刚在成本区（套牢盘解套=买入窗口）
+            #   大正值 = 价格大幅高于成本（浮盈丰厚=抛压区）
+            #   负值   = 价格低于成本（套牢状态）
+            row[CHIP_VS_AVG_COST]   = (
+                float((cur_price - avg_cost) / avg_cost) if avg_cost and avg_cost > 0 else np.nan
+            )
         else:
             row[WIN_PERCENT] = row[CHIP_CONCENTRATION] = row[PRICE_TO_AVGCOST] = np.nan
+            row[CHIP_VS_AVG_COST] = np.nan
 
         return row
 
